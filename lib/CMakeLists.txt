@@ -27,7 +27,7 @@
 
 message("lib/CMakeList.txt")
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pcscd.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/pcscd.cmake)
 find_pcscd()
 
 set(YKPIV_VERSION_STRING "${yubico_piv_tool_VERSION_MAJOR}.${yubico_piv_tool_VERSION_MINOR}.${yubico_piv_tool_VERSION_PATCH}")
@@ -45,7 +45,7 @@ set(SOURCE
 
 include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${CMAKE_SOURCE_DIR}/common
 )
 
 if (ENABLE_CERT_COMPRESS)
@@ -67,6 +67,10 @@ if(BUILD_STATIC_LIB)
     if(WIN32)
         set_target_properties(ykpiv PROPERTIES OUTPUT_NAME ykpiv_static)
     endif()
+    if (ENABLE_STATIC_MSVCRT)
+        set_property(TARGET ykpiv PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+
     add_coverage(ykpiv)
 endif(BUILD_STATIC_LIB)
 
