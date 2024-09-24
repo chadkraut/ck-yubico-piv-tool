@@ -27,7 +27,7 @@
 
 message("lib/CMakeList.txt")
 
-include(${CMAKE_SOURCE_DIR}/cmake/pcscd.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pcscd.cmake)
 find_pcscd()
 
 set(YKPIV_VERSION_STRING "${yubico_piv_tool_VERSION_MAJOR}.${yubico_piv_tool_VERSION_MINOR}.${yubico_piv_tool_VERSION_PATCH}")
@@ -45,7 +45,7 @@ set(SOURCE
 
 include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
 
 if (ENABLE_CERT_COMPRESS)

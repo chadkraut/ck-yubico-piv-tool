@@ -45,7 +45,7 @@ set (VERSION "${yubico_piv_tool_VERSION_MAJOR}.${yubico_piv_tool_VERSION_MINOR}.
 set (SO_VERSION 2)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
-include(${CMAKE_SOURCE_DIR}/cmake/options.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/options.cmake)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
@@ -116,7 +116,7 @@ if(CMAKE_COMPILER_IS_GNUCC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-result")
 endif()
 
-include(${CMAKE_SOURCE_DIR}/cmake/openssl.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/openssl.cmake)
 find_libcrypto()
 include_directories(${LIBCRYPTO_INCLUDE_DIRS})
 
