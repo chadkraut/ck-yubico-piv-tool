@@ -50,6 +50,7 @@ unsigned long get_length_size(unsigned long);
 unsigned long set_length(unsigned char*, unsigned long);
 unsigned long get_length(const unsigned char*, const unsigned char*, unsigned long*);
 int get_curve_name(int);
+int get_pqc_nid(int);
 X509_NAME *parse_name(const char*);
 unsigned char get_algorithm(EVP_PKEY*);
 FILE *open_file(const char *file_name, enum file_mode mode);

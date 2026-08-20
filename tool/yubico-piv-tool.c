@@ -57,6 +57,9 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/crypto.h>
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+#include <openssl/provider.h>
+#endif
 #ifdef USE_CERT_COMPRESS
 #include <zlib.h>
 #endif
@@ -328,9 +331,11 @@ static bool generate_key(ykpiv_state *state, enum enum_slot slot,
   uint8_t *mod = NULL;
   uint8_t *exp = NULL;
   uint8_t *point = NULL;
+  uint8_t *pqc_pubkey = NULL;
   size_t mod_len = 0;
   size_t exp_len = 0;
   size_t point_len = 0;
+  size_t pqc_pubkey_len = 0;
 
   key = get_slot_hex(slot);
 
@@ -344,17 +349,19 @@ static bool generate_key(ykpiv_state *state, enum enum_slot slot,
                          "and Technology (NIST). See https://www.yubico.com/blog/comparing-asymmetric-encryption-algorithms\n\n");
   }
 
-  res = ykpiv_util_generate_key(state,
-                                (uint8_t)(key & 0xFF),
-                                get_piv_algorithm(algorithm),
-                                get_pin_policy(pin_policy),
-                                get_touch_policy(touch_policy),
-                                &mod,
-                                &mod_len,
-                                &exp,
-                                &exp_len,
-                                &point,
-                                &point_len);
+  res = ykpiv_util_generate_key_ex(state,
+                                   (uint8_t)(key & 0xFF),
+                                   get_piv_algorithm(algorithm),
+                                   get_pin_policy(pin_policy),
+                                   get_touch_policy(touch_policy),
+                                   &mod,
+                                   &mod_len,
+                                   &exp,
+                                   &exp_len,
+                                   &point,
+                                   &point_len,
+                                   &pqc_pubkey,
+                                   &pqc_pubkey_len);
   if (res != YKPIV_OK) {
     fprintf(stderr, "Key generation failed.\n");
     goto generate_out;
@@ -421,6 +428,36 @@ static bool generate_key(ykpiv_state *state, enum enum_slot slot,
                         "Upgrade OpenSSL to at least 1.1 or use attestation command to get a signed certificate instead.\n");
         return true;
 #endif
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+      case algorithm_arg_MLDSA44:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_DSA_44, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+      case algorithm_arg_MLDSA65:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_DSA_65, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+      case algorithm_arg_MLDSA87:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_DSA_87, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+      case algorithm_arg_MLKEM512:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_KEM_512, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+      case algorithm_arg_MLKEM768:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_KEM_768, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+      case algorithm_arg_MLKEM1024:
+        public_key = EVP_PKEY_new_raw_public_key(NID_ML_KEM_1024, NULL, pqc_pubkey, pqc_pubkey_len);
+        break;
+#else
+      case algorithm_arg_MLDSA44:
+      case algorithm_arg_MLDSA65:
+      case algorithm_arg_MLDSA87:
+      case algorithm_arg_MLKEM512:
+      case algorithm_arg_MLKEM768:
+      case algorithm_arg_MLKEM1024:
+        fprintf(stderr, "Key was generated successfully but a public key cannot be parsed due to too old OpenSSL version. "
+                        "Upgrade OpenSSL to at least 3.5 or use attestation command to get a signed certificate instead.\n");
+        return true;
+#endif
       default:
         fprintf(stderr, "Wrong algorithm.\n");
     }
@@ -459,6 +496,9 @@ generate_out:
   }
   if (point) {
     ykpiv_util_free(state, point);
+  }
+  if (pqc_pubkey) {
+    ykpiv_util_free(state, pqc_pubkey);
   }
   if (mod) {
     ykpiv_util_free(state, mod);
@@ -689,6 +729,47 @@ static bool import_key(ykpiv_state *state, enum enum_key_format key_format,
                                     NULL, 0,
                                     s_ptr, element_len,
                                     pp, tp);
+    }
+#endif
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+    else if(YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) {
+
+      unsigned char *der_data = NULL;
+      int der_len = i2d_PrivateKey(private_key, &der_data);
+
+      if (der_len <= 0 || !der_data) {
+        fprintf(stderr, "Failed to encode private key to DER.\n");
+        goto import_out;
+      }
+
+      // Search for first OCTET STRING (0x04) with length 32 (0x20) - this is the seed
+      unsigned char *seed_ptr = NULL;
+      for (int i = 0; i < der_len - 33; i++) {
+        if (der_data[i] == 0x04 && der_data[i+1] == 0x20) {
+          seed_ptr = &der_data[i+2];
+          break;
+        }
+      }
+
+      if (!seed_ptr) {
+        fprintf(stderr, "ERROR: Could not find 32-byte seed in DER-encoded private key\n");
+        OPENSSL_free(der_data);
+        goto import_out;
+      }
+
+      unsigned char seed[32];
+      memcpy(seed, seed_ptr, 32);
+      OPENSSL_free(der_data);
+
+      rc = ykpiv_import_private_key_ex(state, key, algorithm,
+                                       NULL, 0,
+                                       NULL, 0,
+                                       NULL, 0,
+                                       NULL, 0,
+                                       NULL, 0,
+                                       NULL, 0,             // ec_data
+                                       seed, 32,            // pqc_privkey (32-byte seed)
+                                       pp, tp);
     }
 #endif
 
@@ -1327,7 +1408,7 @@ static bool selfsign_certificate(ykpiv_state *state, enum enum_key_format key_fo
   size_t oid_len = 0;
   const unsigned char *oid = 0;
   const EVP_MD *md = NULL;
-  if (algorithm != YKPIV_ALGO_ED25519) {
+  if (algorithm != YKPIV_ALGO_ED25519 && !YKPIV_IS_MLDSA(algorithm)) {
     md = get_hash(hash, &oid, &oid_len);
     if (md == NULL) {
       goto selfsign_out;
@@ -1480,7 +1561,7 @@ static bool selfsign_certificate(ykpiv_state *state, enum enum_key_format key_fo
     goto selfsign_out;
   }
   {
-    unsigned char signature[1024] = {0};
+    unsigned char signature[YKPIV_OBJ_MAX_SIZE] = {0};
     size_t sig_len = sizeof(signature);
     if(!sign_data(state, signinput, len, signature, &sig_len, algorithm, key)) {
       fprintf(stderr, "Failed signing certificate.\n");
@@ -1495,30 +1576,49 @@ static bool selfsign_certificate(ykpiv_state *state, enum enum_key_format key_fo
 #else
 
 #if (OPENSSL_VERSION_NUMBER >= 0x10100000L)
-  if (algorithm == YKPIV_ALGO_ED25519) {
+  if (algorithm == YKPIV_ALGO_ED25519 || YKPIV_IS_MLDSA(algorithm)) {
 
-    // Generate a dummy ED25519 to sign with OpenSSL
-    EVP_PKEY *ed_key = NULL;
-    EVP_PKEY_CTX *ed_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
-    EVP_PKEY_keygen_init(ed_ctx);
-    EVP_PKEY_keygen(ed_ctx, &ed_key);
-    EVP_PKEY_CTX_free(ed_ctx);
+    // Generate a dummy key to sign with OpenSSL (Ed25519 or ML-DSA)
+    EVP_PKEY *sig_key = NULL;
+    EVP_PKEY_CTX *sig_ctx = NULL;
 
-    // Sign the X509 object using the dummy key
-    if (X509_sign(x509, ed_key, md) == 0) {
-      fprintf(stderr, "Failed signing certificate.\n");
-      ERR_print_errors_fp(stderr);
-      EVP_PKEY_free(ed_key);
+    if (algorithm == YKPIV_ALGO_ED25519) {
+      sig_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
+    }
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+    else if (algorithm == YKPIV_ALGO_MLDSA44) {
+      sig_ctx = EVP_PKEY_CTX_new_from_name(NULL, "ML-DSA-44", NULL);
+    } else if (algorithm == YKPIV_ALGO_MLDSA65) {
+      sig_ctx = EVP_PKEY_CTX_new_from_name(NULL, "ML-DSA-65", NULL);
+    } else if (algorithm == YKPIV_ALGO_MLDSA87) {
+      sig_ctx = EVP_PKEY_CTX_new_from_name(NULL, "ML-DSA-87", NULL);
+    }
+#endif
+
+    if (!sig_ctx) {
+      fprintf(stderr, "Failed creating context for dummy key.\n");
       goto selfsign_out;
     }
-    EVP_PKEY_free(ed_key);
+
+    EVP_PKEY_keygen_init(sig_ctx);
+    EVP_PKEY_keygen(sig_ctx, &sig_key);
+    EVP_PKEY_CTX_free(sig_ctx);
+
+    // Sign the X509 object using the dummy key
+    if (X509_sign(x509, sig_key, md) == 0) {
+      fprintf(stderr, "Failed signing certificate.\n");
+      ERR_print_errors_fp(stderr);
+      EVP_PKEY_free(sig_key);
+      goto selfsign_out;
+    }
+    EVP_PKEY_free(sig_key);
 
     // Extract the certificate data without the signature
     unsigned char *tbs_data = NULL;
     int tbs_len = i2d_re_X509_tbs(x509, &tbs_data);
 
     // Sign the certificate data using the YubiKey
-    unsigned char yk_sig[512] = {0};
+    unsigned char yk_sig[YKPIV_OBJ_MAX_SIZE] = {0};  // Must fit ML-DSA-87 (4627 bytes)
     size_t yk_siglen = sizeof(yk_sig);
     if (!sign_data(state, tbs_data, tbs_len, yk_sig, &yk_siglen, algorithm, key)) {
       fprintf(stderr, "Failed signing tbs certificate portion.\n");
@@ -1890,6 +1990,24 @@ static void print_algorithm_string(uint8_t algorithm, FILE *output) {
     case YKPIV_ALGO_X25519:
       fprintf(output, "X25519");
       break;
+    case YKPIV_ALGO_MLDSA44:
+      fprintf(output, "ML-DSA-44");
+      break;
+    case YKPIV_ALGO_MLDSA65:
+      fprintf(output, "ML-DSA-65");
+      break;
+    case YKPIV_ALGO_MLDSA87:
+      fprintf(output, "ML-DSA-87");
+      break;
+    case YKPIV_ALGO_MLKEM512:
+      fprintf(output, "ML-KEM-512");
+      break;
+    case YKPIV_ALGO_MLKEM768:
+      fprintf(output, "ML-KEM-768");
+      break;
+    case YKPIV_ALGO_MLKEM1024:
+      fprintf(output, "ML-KEM-1024");
+      break;
     default:
       fprintf(output, "Unknown");
   }
@@ -2168,7 +2286,8 @@ static bool test_signature(ykpiv_state *state, enum enum_slot slot,
   }
 
   {
-    unsigned char signature[1024] = {0};
+    // Buffer sizes: RSA-4096: 512 bytes, ML-DSA-87: 4627 bytes
+    unsigned char signature[5120] = {0};
     unsigned char encoded[1024] = {0};
     unsigned char *ptr = data;
     unsigned int enc_len;
@@ -2253,6 +2372,32 @@ static bool test_signature(ykpiv_state *state, enum enum_slot slot,
             goto test_out;
           } else {
             fprintf(stderr, "Failed EDDSA verification.\n");
+            goto test_out;
+          }
+        }
+        break;
+#endif
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+      case YKPIV_ALGO_MLDSA44:
+      case YKPIV_ALGO_MLDSA65:
+      case YKPIV_ALGO_MLDSA87:
+        {
+          EVP_MD_CTX *ctx;
+          int rc;
+          ctx = EVP_MD_CTX_new();
+          if (!ctx || EVP_DigestVerifyInit(ctx, NULL, NULL, NULL, pubkey) <= 0) {
+            fprintf(stderr, "Failed routine initialization\n");
+            EVP_MD_CTX_free(ctx);
+            goto test_out;
+          }
+          rc = EVP_DigestVerify(ctx, signature, (int)sig_len, data, (int)data_len);
+          EVP_MD_CTX_free(ctx);
+          if(rc == 1) {
+            fprintf(stderr, "Successful ML-DSA verification.\n");
+            ret = true;
+            goto test_out;
+          } else {
+            fprintf(stderr, "Failed ML-DSA verification.\n");
             goto test_out;
           }
         }
@@ -2445,7 +2590,7 @@ static bool list_readers(ykpiv_state *state) {
 
 static bool attest(ykpiv_state *state, enum enum_slot slot,
     enum enum_key_format key_format, const char *output_file_name) {
-  unsigned char data[2048] = {0};
+  unsigned char data[YKPIV_OBJ_MAX_SIZE] = {0};  // Must fit PQC attestation certs
   size_t len = sizeof(data);
   bool ret = false;
   X509 *x509 = NULL;
@@ -2665,6 +2810,17 @@ int main(int argc, char *argv[]) {
   OpenSSL_add_all_algorithms();
 #else
   OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, 0);
+#endif
+
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+  // TODO: shouldn't this be loaded by default?
+  // Load OpenSSL default provider for PQC algorithm support
+  OSSL_PROVIDER *default_provider = OSSL_PROVIDER_load(NULL, "default");
+  if (default_provider == NULL) {
+    fprintf(stderr, "Warning: Failed to load OpenSSL default provider\n");
+    // TODO: exit error or continue without PQC support?
+  }
+  // TODO: probably need to OSSL_PROVIDER_unload(default_provider);
 #endif
 
   if((rc = ykpiv_init(&state, verbosity)) != YKPIV_OK) {

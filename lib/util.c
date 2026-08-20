@@ -762,7 +762,7 @@ Cleanup:
   return res;
 }
 
-ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algorithm, uint8_t pin_policy, uint8_t touch_policy, uint8_t **modulus, size_t *modulus_len, uint8_t **exp, size_t *exp_len, uint8_t **point, size_t *point_len) {
+ykpiv_rc ykpiv_util_generate_key_ex(ykpiv_state *state, uint8_t slot, uint8_t algorithm, uint8_t pin_policy, uint8_t touch_policy, uint8_t **modulus, size_t *modulus_len, uint8_t **exp, size_t *exp_len, uint8_t **point, size_t *point_len, uint8_t **pqc_pubkey, size_t *pqc_pubkey_len) {
   ykpiv_rc res = YKPIV_OK;
   unsigned char in_data[11] = {0};
   unsigned char *in_ptr = in_data;
@@ -776,6 +776,8 @@ ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algor
   size_t  cb_exp = 0;
   uint8_t *ptr_point = NULL;
   size_t  cb_point = 0;
+  uint8_t *ptr_pqc_pubkey = NULL;
+  size_t  cb_pqc_pubkey = 0;
   size_t offs;
 
   setting_bool_t setting_roca = { 0 };
@@ -797,6 +799,10 @@ ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algor
   if ((algorithm == YKPIV_ALGO_RSA3072 || algorithm == YKPIV_ALGO_RSA4096 || YKPIV_IS_25519(algorithm))
        && !is_version_compatible(state, 5, 7, 0)) {
     DBG("RSA3072, RSA4096, ED25519 and X25519 keys are only supported in YubiKey version 5.7.0 and newer");
+    return YKPIV_NOT_SUPPORTED;
+  }
+  if ((YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) && !is_version_compatible(state, 6, 0, 0)) {
+    DBG("ML-DSA and ML-KEM keys are only supported in YubiKey version 6.0.0 and newer");
     return YKPIV_NOT_SUPPORTED;
   }
   if ((algorithm == YKPIV_ALGO_RSA1024 || algorithm == YKPIV_ALGO_RSA2048) && !is_version_compatible(state, 4, 3, 5)) {
@@ -852,6 +858,20 @@ ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algor
     }
     *point = NULL;
     *point_len = 0;
+    break;
+
+  case YKPIV_ALGO_MLDSA44:
+  case YKPIV_ALGO_MLDSA65:
+  case YKPIV_ALGO_MLDSA87:
+  case YKPIV_ALGO_MLKEM512:
+  case YKPIV_ALGO_MLKEM768:
+  case YKPIV_ALGO_MLKEM1024:
+    if (!pqc_pubkey || !pqc_pubkey_len) {
+      DBG("Invalid output parameter for PQC algorithm");
+      return YKPIV_ARGUMENT_ERROR;
+    }
+    *pqc_pubkey = NULL;
+    *pqc_pubkey_len = 0;
     break;
 
   default:
@@ -1001,6 +1021,40 @@ ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algor
     ptr_point = NULL;
     *point_len = cb_point;
   }
+  else if (YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) {
+    unsigned char *data_ptr = data + 3;
+    size_t len = 0;
+    unsigned char expected_tag = YKPIV_IS_MLDSA(algorithm) ? TAG_MLDSA_PUBKEY : TAG_MLKEM_PUBKEY;
+
+    if (*data_ptr++ != expected_tag) {
+      DBG("Failed to parse PQC public key structure (expected tag 0x%02x).", expected_tag);
+      res = YKPIV_PARSE_ERROR;
+      goto Cleanup;
+    }
+
+    // Get the length from the TLV
+    offs = _ykpiv_get_length(data_ptr, data + recv_len, &len);
+    if(!offs) {
+      DBG("Failed to parse PQC public key length.");
+      res = YKPIV_PARSE_ERROR;
+      goto Cleanup;
+    }
+    data_ptr += offs;
+
+    cb_pqc_pubkey = len;
+    if (NULL == (ptr_pqc_pubkey = _ykpiv_alloc(state, cb_pqc_pubkey))) {
+      DBG("Failed to allocate memory for PQC public key.");
+      res = YKPIV_MEMORY_ERROR;
+      goto Cleanup;
+    }
+
+    memcpy(ptr_pqc_pubkey, data_ptr, cb_pqc_pubkey);
+
+    // set output parameters
+    *pqc_pubkey = ptr_pqc_pubkey;
+    ptr_pqc_pubkey = NULL;
+    *pqc_pubkey_len = cb_pqc_pubkey;
+  }
   else {
     DBG("Wrong algorithm.");
     res = YKPIV_ALGORITHM_ERROR;
@@ -1012,9 +1066,21 @@ Cleanup:
   if (ptr_modulus) { _ykpiv_free(state, ptr_modulus); }
   if (ptr_exp) { _ykpiv_free(state, ptr_exp); }
   if (ptr_point) { _ykpiv_free(state, ptr_point); }
+  if (ptr_pqc_pubkey) { _ykpiv_free(state, ptr_pqc_pubkey); }
 
   _ykpiv_end_transaction(state);
   return res;
+}
+
+ykpiv_rc ykpiv_util_generate_key(ykpiv_state *state, uint8_t slot, uint8_t algorithm, uint8_t pin_policy, uint8_t touch_policy, uint8_t **modulus, size_t *modulus_len, uint8_t **exp, size_t *exp_len, uint8_t **point, size_t *point_len) {
+  if (YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) {
+    return YKPIV_ALGORITHM_ERROR;
+  }
+
+  return ykpiv_util_generate_key_ex(state, slot, algorithm, pin_policy, touch_policy,
+                                    modulus, modulus_len, exp, exp_len,
+                                    point, point_len,
+                                    NULL, NULL);
 }
 
 ykpiv_rc ykpiv_util_get_config(ykpiv_state *state, ykpiv_config *config) {

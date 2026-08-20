@@ -1790,6 +1790,54 @@ static ykpiv_rc _general_authenticate(ykpiv_state *state,
         return YKPIV_NOT_SUPPORTED;
       }
       break;
+    case YKPIV_ALGO_MLDSA44:
+      key_len = CB_MLDSA44_SIG;
+      if(decipher) {
+        DBG("Deciphering with ML-DSA-44 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      break;
+    case YKPIV_ALGO_MLDSA65:
+      key_len = CB_MLDSA65_SIG;
+      if(decipher) {
+        DBG("Deciphering with ML-DSA-65 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      break;
+    case YKPIV_ALGO_MLDSA87:
+      key_len = CB_MLDSA87_SIG;
+      if(decipher) {
+        DBG("Deciphering with ML-DSA-87 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      break;
+    case YKPIV_ALGO_MLKEM512:
+      if(!decipher) {
+        DBG("Signing with ML-KEM-512 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      if(in_len != CB_MLKEM512_CT) {
+        return YKPIV_SIZE_ERROR;
+      }
+      break;
+    case YKPIV_ALGO_MLKEM768:
+      if(!decipher) {
+        DBG("Signing with ML-KEM-768 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      if(in_len != CB_MLKEM768_CT) {
+        return YKPIV_SIZE_ERROR;
+      }
+      break;
+    case YKPIV_ALGO_MLKEM1024:
+      if(!decipher) {
+        DBG("Signing with ML-KEM-1024 keys is not supported");
+        return YKPIV_NOT_SUPPORTED;
+      }
+      if(in_len != CB_MLKEM1024_CT) {
+        return YKPIV_SIZE_ERROR;
+      }
+      break;
     default:
       return YKPIV_ALGORITHM_ERROR;
   }
@@ -1800,7 +1848,15 @@ static ykpiv_rc _general_authenticate(ykpiv_state *state,
   dataptr += _ykpiv_set_length(dataptr, in_len + bytes + 3);
   *dataptr++ = 0x82;
   *dataptr++ = 0x00;
-  *dataptr++ = !YKPIV_IS_RSA(algorithm) && decipher ? 0x85 : 0x81;
+
+  if (YKPIV_IS_MLKEM(algorithm)) {
+    *dataptr++ = 0x86;
+  } else if (!YKPIV_IS_RSA(algorithm) && decipher) {
+    *dataptr++ = 0x85;
+  } else {
+    *dataptr++ = 0x81;
+  }
+
   dataptr += _ykpiv_set_length(dataptr, in_len);
   if(dataptr - indata + in_len > sizeof(indata)) {
     return YKPIV_SIZE_ERROR;
@@ -2494,16 +2550,17 @@ ykpiv_rc _ykpiv_save_object(
   return ykpiv_translate_sw_ex(__FUNCTION__, sw);
 }
 
-ykpiv_rc ykpiv_import_private_key(ykpiv_state *state, const unsigned char key, unsigned char algorithm,
-                                  const unsigned char *p, size_t p_len,
-                                  const unsigned char *q, size_t q_len,
-                                  const unsigned char *dp, size_t dp_len,
-                                  const unsigned char *dq, size_t dq_len,
-                                  const unsigned char *qinv, size_t qinv_len,
-                                  const unsigned char *ec_data, unsigned char ec_data_len,
-                                  const unsigned char pin_policy, const unsigned char touch_policy) {
+ykpiv_rc ykpiv_import_private_key_ex(ykpiv_state *state, const unsigned char key, unsigned char algorithm,
+                                     const unsigned char *p, size_t p_len,
+                                     const unsigned char *q, size_t q_len,
+                                     const unsigned char *dp, size_t dp_len,
+                                     const unsigned char *dq, size_t dq_len,
+                                     const unsigned char *qinv, size_t qinv_len,
+                                     const unsigned char *ec_data, size_t ec_data_len,
+                                     const unsigned char *pqc_privkey, size_t pqc_privkey_len,
+                                     const unsigned char pin_policy, const unsigned char touch_policy) {
 
-  unsigned char key_data[2048] = {0};
+  unsigned char key_data[YKPIV_OBJ_MAX_SIZE] = {0};
   unsigned char *in_ptr = key_data;
   unsigned char templ[] = {0, YKPIV_INS_IMPORT_KEY, algorithm, key};
   unsigned char data[256] = {0};
@@ -2600,6 +2657,49 @@ ykpiv_rc ykpiv_import_private_key(ykpiv_state *state, const unsigned char key, u
     }
     n_params = 1;
   }
+  else if (YKPIV_IS_MLDSA(algorithm)) {
+    // TODO: Little confused on this part, is it always seed?
+    if (pqc_privkey_len == 32) {
+      elem_len = 32;
+    } else {
+      // TODO: Should these be defines in internal.h ?
+      switch (algorithm) {
+        case YKPIV_ALGO_MLDSA44:
+          elem_len = 2560;
+          break;
+        case YKPIV_ALGO_MLDSA65:
+          elem_len = 4032;
+          break;
+        case YKPIV_ALGO_MLDSA87:
+          elem_len = 4896;
+          break;
+      }
+    }
+
+    params[0] = pqc_privkey;
+    lens[0] = pqc_privkey_len;
+    param_tag = PARAM_TAG_MLDSA;
+    n_params = 1;
+  }
+  else if (YKPIV_IS_MLKEM(algorithm)) {
+    // TODO: Should these be defines in internal.h ?
+    switch (algorithm) {
+      case YKPIV_ALGO_MLKEM512:
+        elem_len = 1632;
+        break;
+      case YKPIV_ALGO_MLKEM768:
+        elem_len = 2400;
+        break;
+      case YKPIV_ALGO_MLKEM1024:
+        elem_len = 3168;
+        break;
+    }
+
+    params[0] = pqc_privkey;
+    lens[0] = pqc_privkey_len;
+    param_tag = PARAM_TAG_MLKEM;
+    n_params = 1;
+  }
   else {
     return YKPIV_ALGORITHM_ERROR;
   }
@@ -2645,6 +2745,25 @@ Cleanup:
   yc_memzero(key_data, sizeof(key_data));
   _ykpiv_end_transaction(state);
   return res;
+}
+
+ykpiv_rc ykpiv_import_private_key(ykpiv_state *state, const unsigned char key, unsigned char algorithm,
+                                  const unsigned char *p, size_t p_len,
+                                  const unsigned char *q, size_t q_len,
+                                  const unsigned char *dp, size_t dp_len,
+                                  const unsigned char *dq, size_t dq_len,
+                                  const unsigned char *qinv, size_t qinv_len,
+                                  const unsigned char *ec_data, unsigned char ec_data_len,
+                                  const unsigned char pin_policy, const unsigned char touch_policy) {
+  if (YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) {
+    return YKPIV_ALGORITHM_ERROR;
+  }
+
+  return ykpiv_import_private_key_ex(state, key, algorithm,
+                                     p, p_len, q, q_len, dp, dp_len, dq, dq_len, qinv, qinv_len,
+                                     ec_data, ec_data_len,        // ec_data
+                                     NULL, 0,                     // pqc_privkey
+                                     pin_policy, touch_policy);
 }
 
 ykpiv_rc ykpiv_attest(ykpiv_state *state, const unsigned char key, unsigned char *data, size_t *data_len) {

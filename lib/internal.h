@@ -67,13 +67,20 @@ extern "C"
 // always contains 0x5C + 1 byte len + 3 byte id + 0x53 + 3 byte len = 9 bytes,
 // so while the message buffer == CB_BUF_MAX, the maximum object we can store
 // is CB_BUF_MAX - 9
+
+// Device-specific buffer sizes
+#define CB_BUF_MAX_NEO      2048  // YubiKey NEO
+#define CB_BUF_MAX_YK4      3072  // YubiKey 4 and 5 (standard size)
+#define CB_BUF_MAX_YK6      4928  // YubiKey 6 
+
 #define CB_OBJ_MAX_NEO      (CB_BUF_MAX_NEO - 9)
 #define CB_OBJ_MAX_YK4      (CB_BUF_MAX_YK4 - 9)
-#define CB_OBJ_MAX          CB_OBJ_MAX_YK4
+#define CB_OBJ_MAX_YK6      (CB_BUF_MAX_YK6 - 9)
 
-#define CB_BUF_MAX_NEO      2048
-#define CB_BUF_MAX_YK4      3072
-#define CB_BUF_MAX          CB_BUF_MAX_YK4
+// Default to YK6 sizes (4928 bytes) to support PQC operations
+// Static buffers use this size; runtime detection adjusts for older devices
+#define CB_BUF_MAX          CB_BUF_MAX_YK6
+#define CB_OBJ_MAX          CB_OBJ_MAX_YK6
 
 #define CB_ATR_MAX          33
 
@@ -95,10 +102,28 @@ extern "C"
 #define TAG_RSA_MODULUS       0x81
 #define TAG_RSA_EXP           0x82
 #define TAG_ECC_POINT         0x86
+#define TAG_MLDSA_PUBKEY      0x87
+#define TAG_MLKEM_PUBKEY      0x88
 
 #define CB_ECC_POINTP256    65
 #define CB_ECC_POINTP384    97
 #define CB_ECC_POINT25519   32
+#define CB_MLDSA44_PUBKEY   1312
+#define CB_MLDSA65_PUBKEY   1952
+#define CB_MLDSA87_PUBKEY   2592
+#define CB_MLKEM512_PUBKEY  800
+#define CB_MLKEM768_PUBKEY  1184
+#define CB_MLKEM1024_PUBKEY 1568
+#define CB_MLDSA44_SIG      2420
+#define CB_MLDSA65_SIG      3309
+#define CB_MLDSA87_SIG      4627
+#define CB_MLKEM512_CT      768
+#define CB_MLKEM768_CT      1088
+#define CB_MLKEM1024_CT     1568
+
+// Private key import parameter tags
+#define PARAM_TAG_MLDSA     0x09
+#define PARAM_TAG_MLKEM     0x0A
 
 #define YKPIV_OBJ_ADMIN_DATA 0x5fff00
 #define YKPIV_OBJ_ATTESTATION 0x5fff01

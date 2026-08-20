@@ -83,6 +83,7 @@ FILE *open_file(const char *file_name, enum file_mode mode) {
 unsigned char get_algorithm(EVP_PKEY *key) {
   int type = EVP_PKEY_base_id(key);
   int size = EVP_PKEY_bits(key);
+
   switch(type) {
     case EVP_PKEY_RSA:
       {
@@ -116,6 +117,20 @@ unsigned char get_algorithm(EVP_PKEY *key) {
       return YKPIV_ALGO_ED25519;
     case EVP_PKEY_X25519:
       return YKPIV_ALGO_X25519;
+#endif
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+    case NID_ML_DSA_44:
+      return YKPIV_ALGO_MLDSA44;
+    case NID_ML_DSA_65:
+      return YKPIV_ALGO_MLDSA65;
+    case NID_ML_DSA_87:
+      return YKPIV_ALGO_MLDSA87;
+    case NID_ML_KEM_512:
+      return YKPIV_ALGO_MLKEM512;
+    case NID_ML_KEM_768:
+      return YKPIV_ALGO_MLKEM768;
+    case NID_ML_KEM_1024:
+      return YKPIV_ALGO_MLKEM1024;
 #endif
     default:
       fprintf(stderr, "Unknown algorithm %d.\n", type);
@@ -334,6 +349,25 @@ int get_curve_name(int key_algorithm) {
     return NID_X25519;
 #endif
   }
+  return 0;
+}
+
+int get_pqc_nid(int key_algorithm) {
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+  if(key_algorithm == YKPIV_ALGO_MLDSA44) {
+    return NID_ML_DSA_44;
+  } else if(key_algorithm == YKPIV_ALGO_MLDSA65) {
+    return NID_ML_DSA_65;
+  } else if(key_algorithm == YKPIV_ALGO_MLDSA87) {
+    return NID_ML_DSA_87;
+  } else if(key_algorithm == YKPIV_ALGO_MLKEM512) {
+    return NID_ML_KEM_512;
+  } else if(key_algorithm == YKPIV_ALGO_MLKEM768) {
+    return NID_ML_KEM_768;
+  } else if(key_algorithm == YKPIV_ALGO_MLKEM1024) {
+    return NID_ML_KEM_1024;
+  }
+#endif
   return 0;
 }
 
@@ -563,6 +597,18 @@ unsigned char get_piv_algorithm(enum enum_algorithm algorithm) {
       return YKPIV_ALGO_ED25519;
     case algorithm_arg_X25519:
       return YKPIV_ALGO_X25519;
+    case algorithm_arg_MLDSA44:
+      return YKPIV_ALGO_MLDSA44;
+    case algorithm_arg_MLDSA65:
+      return YKPIV_ALGO_MLDSA65;
+    case algorithm_arg_MLDSA87:
+      return YKPIV_ALGO_MLDSA87;
+    case algorithm_arg_MLKEM512:
+      return YKPIV_ALGO_MLKEM512;
+    case algorithm_arg_MLKEM768:
+      return YKPIV_ALGO_MLKEM768;
+    case algorithm_arg_MLKEM1024:
+      return YKPIV_ALGO_MLKEM1024;
     case algorithm__NULL:
     default:
       return 0;
@@ -823,7 +869,17 @@ int do_create_public_key(uint8_t *in, size_t in_len, uint8_t algorithm, EVP_PKEY
     if(in >= eob)
       return YKPIV_GENERIC_ERROR;
 
-    if(*in++ != 0x86)
+    // YubiKey 6.0 spec: ML-DSA uses 0x87, ML-KEM uses 0x88, ECC uses 0x86
+    uint8_t expected_tag;
+    if (YKPIV_IS_MLDSA(algorithm)) {
+      expected_tag = 0x87;  // TAG_MLDSA_PUBKEY
+    } else if (YKPIV_IS_MLKEM(algorithm)) {
+      expected_tag = 0x88;  // TAG_MLKEM_PUBKEY
+    } else {
+      expected_tag = 0x86;  // TAG_ECC_POINT
+    }
+
+    if(*in++ != expected_tag)
       return YKPIV_GENERIC_ERROR;
 
     offs = get_length(in, eob, &len);
@@ -842,6 +898,15 @@ int do_create_public_key(uint8_t *in, size_t in_len, uint8_t algorithm, EVP_PKEY
       } else {
         *pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL, in, len);
       }
+      if (*pkey == NULL) {
+        return YKPIV_MEMORY_ERROR;
+      }
+      return YKPIV_OK;
+#endif
+#if (OPENSSL_VERSION_NUMBER >= 0x30500000L)
+    } else if (YKPIV_IS_MLDSA(algorithm) || YKPIV_IS_MLKEM(algorithm)) {
+      int nid = get_pqc_nid(algorithm);
+      *pkey = EVP_PKEY_new_raw_public_key(nid, NULL, in, len);
       if (*pkey == NULL) {
         return YKPIV_MEMORY_ERROR;
       }

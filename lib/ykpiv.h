@@ -131,6 +131,15 @@ extern "C"
                              unsigned char touch);
   ykpiv_rc ykpiv_save_object(ykpiv_state *state, int object_id,
                              unsigned char *indata, size_t len);
+  ykpiv_rc ykpiv_import_private_key_ex(ykpiv_state *state, const unsigned char key, unsigned char algorithm,
+                                       const unsigned char *p, size_t p_len,
+                                       const unsigned char *q, size_t q_len,
+                                       const unsigned char *dp, size_t dp_len,
+                                       const unsigned char *dq, size_t dq_len,
+                                       const unsigned char *qinv, size_t qinv_len,
+                                       const unsigned char *ec_data, size_t ec_data_len,
+                                       const unsigned char *pqc_privkey, size_t pqc_privkey_len,
+                                       const unsigned char pin_policy, const unsigned char touch_policy);
   ykpiv_rc ykpiv_import_private_key(ykpiv_state *state, const unsigned char key, unsigned char algorithm,
                                     const unsigned char *p, size_t p_len,
                                     const unsigned char *q, size_t q_len,
@@ -402,6 +411,41 @@ extern "C"
   ykpiv_rc ykpiv_util_delete_cert(ykpiv_state *state, uint8_t slot);
 
   /**
+   * Generate key in given slot with specified parameters (extended API)
+   *
+   * \p modulus, \p exp, \p ec_point, and \p pqc_pubkey should be freed with \p ykpiv_util_free() after use.
+   *
+   * If algorithm is RSA1024 or RSA2048, the modulus, modulus_len, exp, and exp_len output parameters must be supplied.  They are filled with with public modulus (big-endian), its size, the public exponent (big-endian), and its size respectively.
+   *
+   * If algorithm is ECCP256 or ECCP384, the point and point_len output parameters must be supplied.  They are filled with the public point (uncompressed octet-string encoded per SEC1 section 2.3.4)
+   *
+   * If algorithm is ECCP256, the curve is always ANSI X9.62 Prime 256v1
+   *
+   * If algorithm is ECCP384, the curve is always secp384r1
+   * 
+   * If algorithm is MLDSA44, MLDSA65, or MLDSA87, provide pqc_pubkey, pqc_pubkey_len. Others NULL.
+   * 
+   * If algorithm is MLKEM512, MLKEM768, or MLKEM1024, provide pqc_pubkey, pqc_pubkey_len. Others NULL.
+   *
+   * @param state          State handle
+   * @param slot           Slot to generate key in
+   * @param algorithm      Key algorithm, specified as one of the \p YKPIV_ALGO_* options
+   * @param pin_policy     Per-slot PIN policy, specified as one of the \p YKPIV_PINPOLICY_* options
+   * @param touch_policy   Per-slot touch policy, specified as one of the \p YKPIV_TOUCHPOLICY_* options.
+   * @param modulus        [out] RSA public modulus (RSA only)
+   * @param modulus_len    [out] Size of \p modulus (RSA only)
+   * @param exp            [out] RSA public exponent (RSA only)
+   * @param exp_len        [out] Size of \p exp (RSA only)
+   * @param point          [out] Public curve point (ECC-only)
+   * @param point_len      [out] Size of \p point (ECC-only)
+   * @param pqc_pubkey     [out] ML-DSA/ML-KEM public key bytes
+   * @param pqc_pubkey_len [out] Size of \p pqc_pubkey
+   *
+   * @return ykpiv_rc error code
+   */
+  ykpiv_rc ykpiv_util_generate_key_ex(ykpiv_state *state, uint8_t slot, uint8_t algorithm, uint8_t pin_policy, uint8_t touch_policy, uint8_t **modulus, size_t *modulus_len, uint8_t **exp, size_t *exp_len, uint8_t **point, size_t *point_len, uint8_t **pqc_pubkey, size_t *pqc_pubkey_len);
+
+  /**
    * Generate key in given slot with specified parameters
    *
    * \p modulus, \p exp, and \p point should be freed with \p ykpiv_util_free() after use.
@@ -638,6 +682,12 @@ extern "C"
 #define YKPIV_ALGO_ECCP384 0x14
 #define YKPIV_ALGO_ED25519 0xE0
 #define YKPIV_ALGO_X25519 0xE1
+#define YKPIV_ALGO_MLDSA44 0xE2
+#define YKPIV_ALGO_MLDSA65 0xE3
+#define YKPIV_ALGO_MLDSA87 0xE4
+#define YKPIV_ALGO_MLKEM512 0xE5
+#define YKPIV_ALGO_MLKEM768 0xE6
+#define YKPIV_ALGO_MLKEM1024 0xE7
 
 #define YKPIV_ALGO_AUTO 0xff
 
@@ -712,7 +762,9 @@ extern "C"
 #define TAG_CERT_COMPRESS     0x71
 #define TAG_CERT_LRC          0xFE
 
-#define YKPIV_OBJ_MAX_SIZE 3072
+#define YKPIV_OBJ_MAX_SIZE 4928  // YubiKey 6 max object size (increased for PQC operations)
+                                 // YubiKey 4/5: 3063 bytes, YubiKey NEO: 2039 bytes
+                                 // Runtime detection handles older devices
 
 #define YKPIV_INS_VERIFY 0x20
 #define YKPIV_INS_CHANGE_REFERENCE 0x24
@@ -791,6 +843,8 @@ extern "C"
 #define YKPIV_IS_EC(a) ((a == YKPIV_ALGO_ECCP256 || a == YKPIV_ALGO_ECCP384))
 #define YKPIV_IS_RSA(a) ((a == YKPIV_ALGO_RSA1024 || a == YKPIV_ALGO_RSA2048 || a == YKPIV_ALGO_RSA3072 || a == YKPIV_ALGO_RSA4096))
 #define YKPIV_IS_25519(a) ((a == YKPIV_ALGO_ED25519 || a == YKPIV_ALGO_X25519))
+#define YKPIV_IS_MLDSA(a) ((a == YKPIV_ALGO_MLDSA44 || a == YKPIV_ALGO_MLDSA65 || a == YKPIV_ALGO_MLDSA87))
+#define YKPIV_IS_MLKEM(a) ((a == YKPIV_ALGO_MLKEM512 || a == YKPIV_ALGO_MLKEM768 || a == YKPIV_ALGO_MLKEM1024))
 
 #define YKPIV_MIN_PIN_LEN 6
 #define YKPIV_MAX_PIN_LEN 8
@@ -821,6 +875,7 @@ extern "C"
 #define DEVTYPE_NEOr3    (DEVTYPE_NEO | 0x00007233) //"r3"
 #define DEVTYPE_YK4      (DEVTYPE_YK  | 0x00000034) // "4"
 #define DEVTYPE_YK5      (DEVTYPE_YK  | 0x00000035) // "5"
+#define DEVTYPE_YK6      (DEVTYPE_YK  | 0x00000036) // "6"
 #define DEVYTPE_YK5      DEVTYPE_YK5 // Keep old typo for backwards compatibility
 
 #ifdef __cplusplus
